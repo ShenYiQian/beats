@@ -94,25 +94,28 @@ func (c *client) Publish(batch publisher.Batch) error {
 
 	events := batch.Events()
 	c.stats.NewBatch(len(events))
-	rest, err := c.publish(events)
-	if rest != nil {
-		c.stats.Failed(len(rest))
-		batch.RetryEvents(rest)
+	err := c.publish(events)
+	if err != nil {
+		logp.Err("publish failed:", err)
 	}
 	return err
 }
 
 
-func (c *client) publish(data []publisher.Event) ([]publisher.Event, error) {
+func (c *client) publish(data []publisher.Event) error {
  	var err error
 
-	okEvents, serialized := c.serializeEvents(data)
+	serialized := c.serializeEvents(data)
 	// logp.Info("Number of points: %v", len(serialized))
 
-	c.stats.Dropped(len(data) - len(okEvents))
+	dropped := len(data) - len(serialized)
+	c.stats.Dropped(dropped)
+	if (dropped >0 ) {
+		logp.Info("Number of dropped points: %v/%v", dropped, len(data)) 
+	}
 
 	if (len(serialized)) == 0 {
-		return nil, nil
+		return nil
 	}
 
 
@@ -132,12 +135,12 @@ func (c *client) publish(data []publisher.Event) ([]publisher.Event, error) {
 
 	if err != nil {
 		logp.Err("Failed to write to influxdb: %v", err)
-		return okEvents, err
+		return err
 
 	}
 
-	c.stats.Acked(len(okEvents))
-	return nil, nil
+	c.stats.Acked(len(serialized))
+	return nil
 }
 
 func (c *client) scanFields(originFields map[string]interface{}) (map[string]string, map[string]interface{}) {
@@ -169,36 +172,32 @@ func (c *client) scanFields(originFields map[string]interface{}) (map[string]str
 
 func (c *client) serializeEvents(
 	data []publisher.Event,
-) ([]publisher.Event, []*influxdb.Point) {
+) ([]*influxdb.Point) {
 	i := 0
-	succeeded := data
 	to := make([]*influxdb.Point, 0, len(data))
   
 
 	for _, d := range data {
-	t := d.Content.Timestamp
-	if timestamp,ok := d.Content.Fields[c.timeField]; ok {
-		if v, ok := timestamp.(int64); ok {
-			t = time.Unix(v, 0)
+		t := d.Content.Timestamp
+		if timestamp,ok := d.Content.Fields[c.timeField]; ok {
+			if v, ok := timestamp.(int64); ok {
+				t = time.Unix(v, 0)
+			}
 		}
-	}
 
-	tags, fields := c.scanFields(d.Content.Fields)
+		tags, fields := c.scanFields(d.Content.Fields)
 
-	point, err := influxdb.NewPoint(c.measurement, tags, fields, t)
-	if err != nil {
-		logp.Err("Encoding event failed with error: %v", err)
-		goto end
-	}
+		point, err := influxdb.NewPoint(c.measurement, tags, fields, t)
+		if err != nil {
+			logp.Err("Encoding event failed with error: %v", err)
+			goto end
+		}
 
-	to = append(to, point)
+		to = append(to, point)
 		i++
 	}
 
-	return succeeded, to
 
 end:
-	succeeded = data[:i]
-	// rest := data[i+1:]
-	return succeeded, to
+	return to
 }
