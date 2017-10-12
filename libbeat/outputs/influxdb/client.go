@@ -1,9 +1,9 @@
 package influxdb
 
 import (
+	"fmt"
+	influxdb "github.com/influxdata/influxdb/client/v2"
 	"time"
- 	"fmt"
- 	influxdb "github.com/influxdata/influxdb/client/v2"
 
 	"github.com/elastic/beats/libbeat/logp"
 	"github.com/elastic/beats/libbeat/outputs"
@@ -11,73 +11,70 @@ import (
 )
 
 type client struct {
-	conn  		influxdb.Client
-	stats  		*outputs.Stats
- 	addr		string
- 	username        string
-	password        string
-	db		string
-	measurement     string
-	timePrecision   string
- 	tagFields	[]string
- 	tagFieldsHash	map[string]int
- 	timeField	string
+	conn          influxdb.Client
+	stats         *outputs.Stats
+	addr          string
+	username      string
+	password      string
+	db            string
+	measurement   string
+	timePrecision string
+	tagFields     []string
+	tagFieldsHash map[string]int
+	timeField     string
 }
-
-
 
 func newClient(
 	stats *outputs.Stats,
- 	addr string,
- 	user string,
+	addr string,
+	user string,
 	pass string,
-	db string, 
+	db string,
 	measurement string,
- 	timePrecision string,
- 	tagFields []string,
- 	timeField string,
+	timePrecision string,
+	tagFields []string,
+	timeField string,
 ) *client {
 
- 	hash := make(map[string]int)
- 	for _, f := range tagFields {
- 		if f != "" {
- 			hash[f] = 1
- 		}
- 	}
-  
+	hash := make(map[string]int)
+	for _, f := range tagFields {
+		if f != "" {
+			hash[f] = 1
+		}
+	}
+
 	return &client{
-		stats:    stats,
- 		addr:     addr,
- 		username: user,
-		password: pass,
-		db:       db,
- 		measurement: measurement,
- 		timePrecision: timePrecision,
- 		tagFields: tagFields,
- 		tagFieldsHash: hash,
- 		timeField: timeField,
+		stats:         stats,
+		addr:          addr,
+		username:      user,
+		password:      pass,
+		db:            db,
+		measurement:   measurement,
+		timePrecision: timePrecision,
+		tagFields:     tagFields,
+		tagFieldsHash: hash,
+		timeField:     timeField,
 	}
 }
 
 func (c *client) Connect() error {
- 	var err error
+	var err error
 	debugf("connect")
 
 	c.conn, err = influxdb.NewHTTPClient(influxdb.HTTPConfig{
-		Addr: c.addr,
+		Addr:     c.addr,
 		Username: c.username,
 		Password: c.password,
 	})
- 	if err != nil {
+	if err != nil {
 		logp.Err("Failed to create HTTP conn to influxdb: %v", err)
-      		return err
- 	}
+		return err
+	}
 
 	logp.Info("Client to influxdb has created: %v", c.addr)
-  
+
 	return err
 }
-
 
 func (c *client) Close() error {
 	debugf("close connection")
@@ -94,59 +91,57 @@ func (c *client) Publish(batch publisher.Batch) error {
 
 	events := batch.Events()
 	c.stats.NewBatch(len(events))
-	err := c.publish(events)
+	failed, err := c.publish(events)
 	if err != nil {
 		logp.Err("publish failed:", err)
+		batch.RetryEvents(failed)
+		c.stats.Failed(len(failed))
 	}
+	batch.ACK()
 	return err
 }
 
-
-func (c *client) publish(data []publisher.Event) error {
- 	var err error
+func (c *client) publish(data []publisher.Event) ([]publisher.Event, error) {
+	var err error
 
 	serialized := c.serializeEvents(data)
-	// logp.Info("Number of points: %v", len(serialized))
 
 	dropped := len(data) - len(serialized)
 	c.stats.Dropped(dropped)
-	if (dropped >0 ) {
-		logp.Info("Number of dropped points: %v/%v", dropped, len(data)) 
+	if dropped > 0 {
+		logp.Info("Number of dropped points: %v/%v", dropped, len(data))
 	}
 
 	if (len(serialized)) == 0 {
-		return nil
+		return nil, nil
 	}
 
-
- 	bp, _ := influxdb.NewBatchPoints(influxdb.BatchPointsConfig{
- 		Database:  c.db,
- 		Precision: c.timePrecision,
+	bp, _ := influxdb.NewBatchPoints(influxdb.BatchPointsConfig{
+		Database:  c.db,
+		Precision: c.timePrecision,
 	})
 
-
- 	for i := 0; i < len(serialized); i++ {
+	for i := 0; i < len(serialized); i++ {
 		pt := serialized[i]
 		bp.AddPoint(pt)
 	}
 
 	err = c.conn.Write(bp)
 
-
 	if err != nil {
 		logp.Err("Failed to write to influxdb: %v", err)
-		return err
+		return data[:len(serialized)], err
 
 	}
 
 	c.stats.Acked(len(serialized))
-	return nil
+	return nil, nil
 }
 
 func (c *client) scanFields(originFields map[string]interface{}) (map[string]string, map[string]interface{}) {
 	tags := make(map[string]string)
 	fields := make(map[string]interface{})
-  
+
 	for k, _ := range originFields {
 		_, ok := c.tagFieldsHash[k]
 		if !ok {
@@ -154,14 +149,14 @@ func (c *client) scanFields(originFields map[string]interface{}) (map[string]str
 			continue
 		}
 
-		// This field is a tag, need to check wether is a string 
+		// This field is a tag, need to check wether is a string
 		switch v := originFields[k].(type) {
 		case string:
 			tags[k] = v
 		case int, int8, int16, int32, int64:
 			tags[k] = fmt.Sprintf("%d", v)
 		default:
-        		logp.Warn("Unsupported tag type: %v(%T)", v, v)
+			logp.Warn("Unsupported tag type: %v(%T)", v, v)
 		}
 	}
 
@@ -169,17 +164,14 @@ func (c *client) scanFields(originFields map[string]interface{}) (map[string]str
 
 }
 
-
 func (c *client) serializeEvents(
 	data []publisher.Event,
-) ([]*influxdb.Point) {
-	i := 0
+) []*influxdb.Point {
 	to := make([]*influxdb.Point, 0, len(data))
-  
 
 	for _, d := range data {
 		t := d.Content.Timestamp
-		if timestamp,ok := d.Content.Fields[c.timeField]; ok {
+		if timestamp, ok := d.Content.Fields[c.timeField]; ok {
 			if v, ok := timestamp.(int64); ok {
 				t = time.Unix(v, 0)
 			}
@@ -194,9 +186,7 @@ func (c *client) serializeEvents(
 		}
 
 		to = append(to, point)
-		i++
 	}
-
 
 end:
 	return to
