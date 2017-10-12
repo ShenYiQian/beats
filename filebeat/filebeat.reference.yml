@@ -1031,6 +1031,17 @@ output.elasticsearch:
   # default is 7 files.
   #number_of_files: 7
 
+#----------------------------- Influxdb output ---------------------------------
+#output.influxdb:
+  #enabled: true
+  #addr: 'http://10.190.200.154:8086'
+  #username: 'root'
+  #password: 'root'
+  #db: 'rdp_test_db'
+  #measurement: 'metrics'
+  #send_as_tags: ["endpoint", "metricName"]
+  #send_as_time: "timestamp"
+  #time_precision: 's'
 
 #----------------------------- Console output ---------------------------------
 #output.console:
