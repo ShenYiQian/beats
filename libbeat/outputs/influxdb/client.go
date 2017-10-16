@@ -173,7 +173,13 @@ func (c *client) serializeEvents(
 		t := d.Content.Timestamp
 		if timestamp, ok := d.Content.Fields[c.timeField]; ok {
 			if v, ok := timestamp.(int64); ok {
-				t = time.Unix(v, 0)
+				if c.timePrecision == "s" {
+					t = time.Unix(v, 0)
+				} else if c.timePrecision == "ms" {
+					t = time.Unix(v/1000, (v%1000)*1000*1000)
+				} else {
+					logp.Warn("Unsupported time precision: %v", c.timePrecision)
+				}
 			}
 		}
 
