@@ -96,9 +96,10 @@ func (c *client) Publish(batch publisher.Batch) error {
 		logp.Err("publish failed:", err)
 		batch.RetryEvents(failed)
 		c.stats.Failed(len(failed))
+		return err
 	}
 	batch.ACK()
-	return err
+	return nil
 }
 
 func (c *client) publish(data []publisher.Event) ([]publisher.Event, error) {
@@ -130,6 +131,9 @@ func (c *client) publish(data []publisher.Event) ([]publisher.Event, error) {
 
 	if err != nil {
 		logp.Err("Failed to write to influxdb: %v", err)
+		for _, event := range data[:len(serialized)] {
+                       logp.Info("Content: ", event.Content)
+                }
 		return data[:len(serialized)], err
 
 	}
